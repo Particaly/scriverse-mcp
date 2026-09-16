@@ -28,7 +28,7 @@ scriverse-mcp（本包，本地进程）
 ## 安装
 
 ```bash
-npm install --global scriverse-mcp
+npm install --global @jspatrick/scriverse-mcp
 ```
 
 ## 认证
