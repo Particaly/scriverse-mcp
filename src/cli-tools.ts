@@ -1,11 +1,29 @@
 import { z } from "zod";
+import {
+  RESOURCE_TYPES,
+  aiAnswerSchema,
+  annotationCreateSchema,
+  annotationUpdateSchema,
+  chapterBatchSchema,
+  chapterMoveSchema,
+  compactFieldSummary,
+  describeResourceQuickReference,
+  resourceCreateSchemas,
+  resourceUpdateSchemas,
+  validateJsonInput,
+  workCreateSchema,
+  workUpdateSchema,
+  writingGoalSchema,
+  type ResourceType
+} from "./backend-schemas.js";
 
 /**
  * 一个 MCP 工具的完整定义：名称、说明、Zod 输入规范和把输入转换为
  * scriverse CLI argv 的纯函数。
  *
- * buildArgs 只做参数组合校验与映射，抛出的错误会原样转成 MCP 工具错误结果；
- * 所有业务校验（权限、字段规范、版本号）仍由 scriverse CLI 与服务端完成。
+ * buildArgs 做参数组合校验、写操作 input 的字段规范校验（与 Scriverse
+ * 服务端 schema 一致，冗余/未知字段直接拒绝）与 argv 映射，抛出的错误会
+ * 原样转成 MCP 工具错误结果；权限、版本号等业务校验仍由 CLI 与服务端完成。
  */
 export type CliToolDefinition = {
   name: string;
@@ -14,22 +32,6 @@ export type CliToolDefinition = {
   inputSchema: Record<string, z.ZodTypeAny>;
   buildArgs: (args: Record<string, unknown>) => string[];
 };
-
-/** CLI v1.0.x 契约中的资源类型，与 `scriverse schema list` 保持一致。 */
-const RESOURCE_TYPES = [
-  "volume",
-  "chapter",
-  "draft",
-  "setting",
-  "character",
-  "race",
-  "organization",
-  "timeline-track",
-  "timeline-event",
-  "relationship",
-  "foreshadow",
-  "chapter-outline"
-] as const;
 
 function requireText(args: Record<string, unknown>, field: string, label: string): string {
   const value = args[field];
@@ -76,7 +78,7 @@ const resourceActionSchema = z.enum(["list", "get", "create", "update", "history
 const workIdSchema = z.string().min(1).max(200).describe("作品 ID，通常以 work_ 开头");
 
 const jsonInputSchema = z.record(z.string(), z.unknown())
-  .describe("JSON 请求体；字段规范先用 scriverse_schema 查询对应资源类型");
+  .describe("JSON 请求体；字段规范先用 scriverse_schema 查询对应资源类型。写入时会按服务端字段规范做 strict 校验：未知/冗余字段会被直接拒绝，不会提交");
 
 const versionSchema = z.number().int().positive().describe("要恢复到的历史版本号");
 
@@ -123,17 +125,24 @@ export function defineCliTools(): CliToolDefinition[] {
       inputSchema: {
         action: workActionSchema.describe("作品操作类型"),
         workId: workIdSchema.optional().describe("作品 ID；除 list、create 外必填"),
-        input: jsonInputSchema.optional().describe("create/update 的请求体"),
+        input: jsonInputSchema.optional()
+          .describe(`create/update 请求体字段：${compactFieldSummary(workCreateSchema)}。update 时字段均可选，changeNote 与 expectedVersionNo 只能放 input 内。* 为必填；冗余字段会被拒绝`),
         version: versionSchema.optional().describe("action=restore 时必填"),
         expectedVersionNo: expectedVersionSchema.optional()
       },
       buildArgs: (args) => {
         const action = requireText(args, "action", "作品操作");
         if (action === "list") return ["work", "list"];
-        if (action === "create") return ["work", "create", "--input", "-"];
+        if (action === "create") {
+          validateJsonInput(workCreateSchema, requireInput(args), "work create");
+          return ["work", "create", "--input", "-"];
+        }
         const workId = requireText(args, "workId", "作品 ID");
         if (action === "get") return ["work", "get", workId];
-        if (action === "update") return ["work", "update", workId, "--input", "-"];
+        if (action === "update") {
+          validateJsonInput(workUpdateSchema, requireInput(args), "work update");
+          return ["work", "update", workId, "--input", "-"];
+        }
         if (action === "history") return ["work", "history", workId];
         if (action === "restore") {
           const version = optionalNumber(args, "version");
@@ -156,13 +165,17 @@ export function defineCliTools(): CliToolDefinition[] {
         "时间轴、时间线事件、人物关系、伏笔、章节大纲。",
         "list 时 id 是作品 ID（章节大纲用章节 ID 也可，见 schema）；get/update/history/restore 时 id 是资源 ID；",
         "create 时 id 是归属 ID（多数资源为作品 ID，chapter-outline 为章节 ID）。",
-        "update 支持可选 changeNote 写入版本说明（volume 不支持）；写操作前建议先用 scriverse_schema 确认字段。"
-      ].join(""),
+        "update 支持可选 changeNote 写入版本说明（volume 不支持）；写操作前建议先用 scriverse_schema 确认字段。",
+        "create/update 的 input 会按服务端字段规范做 strict 校验：未知/冗余字段会被直接拒绝（例如人物扩展属性请写 attributes.details 的 {label, value} 结构）。",
+        "",
+        describeResourceQuickReference()
+      ].join("\n"),
       inputSchema: {
         type: z.enum(RESOURCE_TYPES).describe("资源类型"),
         action: resourceActionSchema.describe("资源操作类型"),
         id: z.string().min(1).max(200).optional().describe("按 action 而定的 ID：作品 ID / 章节 ID / 资源 ID"),
-        input: jsonInputSchema.optional().describe("create/update 的请求体"),
+        input: jsonInputSchema.optional()
+          .describe("create/update 的 JSON 请求体；写入前按服务端字段规范做 strict 校验，未知/冗余字段会被直接拒绝。各类型必填字段见工具描述末尾速查，完整逐字段格式用 scriverse_schema action=show type=<类型> 获取"),
         changeNote: z.string().max(500).optional()
           .describe("可选版本说明，最多 500 字；仅 update 支持，volume 不支持"),
         version: versionSchema.optional().describe("action=restore 时必填"),
@@ -175,11 +188,17 @@ export function defineCliTools(): CliToolDefinition[] {
           return ["resource", "list", type, requireText(args, "id", "作品 ID")];
         }
         if (action === "create") {
+          const schema = resourceCreateSchemas[type as ResourceType];
+          if (!schema) throw new Error(`不支持的资源类型：${type}`);
+          validateJsonInput(schema, requireInput(args), `${type} create`);
           return ["resource", "create", type, requireText(args, "id", "归属 ID"), "--input", "-"];
         }
         const id = requireText(args, "id", "资源 ID");
         if (action === "get") return ["resource", "get", type, id];
         if (action === "update") {
+          const schema = resourceUpdateSchemas[type as ResourceType];
+          if (!schema) throw new Error(`不支持的资源类型：${type}`);
+          validateJsonInput(schema, requireInput(args), `${type} update`);
           const changeNote = optionalText(args, "changeNote");
           return [
             "resource", "update", type, id, "--input", "-",
@@ -272,14 +291,15 @@ export function defineCliTools(): CliToolDefinition[] {
       inputSchema: {
         action: z.enum(["progress", "goal"]).describe("progress：查询进度；goal：更新目标"),
         workId: workIdSchema,
-        input: jsonInputSchema.optional().describe("action=goal 时必填的请求体")
+        input: jsonInputSchema.optional()
+          .describe(`action=goal 时必填。字段：${compactFieldSummary(writingGoalSchema)}（* 为必填；冗余字段会被拒绝）`)
       },
       buildArgs: (args) => {
         const action = requireText(args, "action", "写作操作");
         const workId = requireText(args, "workId", "作品 ID");
         if (action === "progress") return ["writing", "progress", workId];
         if (action === "goal") {
-          requireInput(args);
+          validateJsonInput(writingGoalSchema, requireInput(args), "writing goal");
           return ["writing", "goal", workId, "--input", "-"];
         }
         throw new Error(`不支持的写作操作：${action}`);
@@ -298,13 +318,20 @@ export function defineCliTools(): CliToolDefinition[] {
         id: z.string().min(1).max(200).optional()
           .describe("move 时为章节 ID；batch 时为作品 ID"),
         input: jsonInputSchema.optional()
+          .describe(`move：${compactFieldSummary(chapterMoveSchema)}。batch：${compactFieldSummary(chapterBatchSchema)}。* 为必填；冗余字段会被拒绝`)
       },
       buildArgs: (args) => {
         const action = requireText(args, "action", "章节操作");
         const id = requireText(args, "id", action === "batch" ? "作品 ID" : "章节 ID");
-        requireInput(args);
-        if (action === "move") return ["chapter", "move", id, "--input", "-"];
-        if (action === "batch") return ["chapter", "batch", id, "--input", "-"];
+        const input = requireInput(args);
+        if (action === "move") {
+          validateJsonInput(chapterMoveSchema, input, "chapter move");
+          return ["chapter", "move", id, "--input", "-"];
+        }
+        if (action === "batch") {
+          validateJsonInput(chapterBatchSchema, input, "chapter batch");
+          return ["chapter", "batch", id, "--input", "-"];
+        }
         throw new Error(`不支持的章节操作：${action}`);
       }
     },
@@ -320,7 +347,8 @@ export function defineCliTools(): CliToolDefinition[] {
       inputSchema: {
         action: z.enum(["list", "list-work", "create", "update", "delete"]).describe("批注操作"),
         id: z.string().min(1).max(200).optional().describe("按 action 而定的 ID"),
-        input: jsonInputSchema.optional().describe("create/update 的请求体"),
+        input: jsonInputSchema.optional()
+          .describe(`create：${compactFieldSummary(annotationCreateSchema)}。update：${compactFieldSummary(annotationUpdateSchema)}。* 为必填；update 至少提供 note 或 status；冗余字段会被拒绝`),
         expectedVersionNo: expectedVersionSchema.optional().describe("action=delete 时的可选乐观锁")
       },
       buildArgs: (args) => {
@@ -328,10 +356,14 @@ export function defineCliTools(): CliToolDefinition[] {
         if (action === "list") return ["annotation", "list", requireText(args, "id", "章节 ID")];
         if (action === "list-work") return ["annotation", "list-work", requireText(args, "id", "作品 ID")];
         if (action === "create") {
+          validateJsonInput(annotationCreateSchema, requireInput(args), "annotation create");
           return ["annotation", "create", requireText(args, "id", "章节 ID"), "--input", "-"];
         }
         const id = requireText(args, "id", "批注 ID");
-        if (action === "update") return ["annotation", "update", id, "--input", "-"];
+        if (action === "update") {
+          validateJsonInput(annotationUpdateSchema, requireInput(args), "annotation update");
+          return ["annotation", "update", id, "--input", "-"];
+        }
         if (action === "delete") {
           const expected = optionalNumber(args, "expectedVersionNo");
           return ["annotation", "delete", id, ...(expected === undefined ? [] : flag("expected-version", expected))];
@@ -369,7 +401,8 @@ export function defineCliTools(): CliToolDefinition[] {
         conversationId: z.string().min(1).max(200).optional()
           .describe("action=list 时可选，按对话过滤"),
         limit: z.number().int().min(1).max(200).optional().describe("action=list 时的条数上限"),
-        input: jsonInputSchema.optional().describe("action=answer 时必填的回答内容")
+        input: jsonInputSchema.optional()
+          .describe("action=answer 时必填。两种形式之一：{selectedOption?: 整数≥0（预设选项下标，从 0 起）, customAnswer?: 1..3000 字}（至少提供其一，可同时提供）；或批量 {answers: [同上结构]}（1..5 条）。冗余字段会被拒绝")
       },
       buildArgs: (args) => {
         const action = requireText(args, "action", "提问操作");
@@ -388,7 +421,7 @@ export function defineCliTools(): CliToolDefinition[] {
         const questionId = requireText(args, "questionId", "提问 ID");
         if (action === "get") return ["ai", "questions", "get", workId, questionId];
         if (action === "answer") {
-          requireInput(args);
+          validateJsonInput(aiAnswerSchema, requireInput(args), "ai questions answer");
           return ["ai", "questions", "answer", workId, questionId, "--input", "-"];
         }
         if (action === "reject") return ["ai", "questions", "reject", workId, questionId];

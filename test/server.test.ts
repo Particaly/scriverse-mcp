@@ -108,6 +108,42 @@ describe("scriverse-mcp server", () => {
     }
   });
 
+  it("scriverse_schema 结果附带合法字段格式说明", async () => {
+    const { client, server } = await connectStubServer();
+    try {
+      const overview = await callText(client, "scriverse_schema", { action: "list" });
+      expect(overview.isError).toBeFalsy();
+      expect(overview.content[0]?.text).toContain("[scriverse-mcp 写入校验]");
+      const show = await callText(client, "scriverse_schema", { action: "show", type: "character" });
+      expect(show.isError).toBeFalsy();
+      expect(show.content[0]?.text).toContain("character 字段规范");
+      expect(show.content[0]?.text).toContain("details");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("写操作 input 含冗余字段时拒绝提交且不调用 CLI", async () => {
+    const { client, server } = await connectStubServer();
+    try {
+      const result = await callText(client, "scriverse_resource", {
+        type: "character",
+        action: "update",
+        id: "char_1",
+        input: { attributes: { height: "176cm" } }
+      });
+      expect(result.isError).toBe(true);
+      const text = result.content[0]?.text ?? "";
+      expect(text).toContain("input 校验失败");
+      expect(text).toContain("未知字段 height");
+      expect(text).not.toContain("received");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("缺少必填参数时返回参数错误", async () => {
     const { client, server } = await connectStubServer();
     try {

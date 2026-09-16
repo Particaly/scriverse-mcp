@@ -93,6 +93,34 @@ npx scriverse auth login --server https://your-scriverse.example.com --api-key-f
 | `scriverse_ai_rename` | `ai rename` | 重命名 AI 对话 |
 | `scriverse_ai_questions` | `ai questions ...` | 查看、回答、拒绝 AI 发起的用户提问 |
 
+## 写入校验（strict input validation）
+
+所有 create/update 的 `input` 在本包内按 Scriverse 服务端的真实字段规范（`src/app.ts` 的 zod schema 与前端读写约定）做 strict 校验，非法请求直接拒绝、不会发送到服务端：
+
+- **冗余/未知字段一律拒绝**。服务端对部分资源是静默剥离冗余字段（数据悄悄丢失）、部分是整体报错，本包统一在提交前拦截并指出具体字段。
+- **character 的深层结构**：`attributes` 仅允许 `identity`、`species`（遗留，服务端转为种族引用）、`details`（`{label, value}` 两个必填非空字符串的数组，身高、体重等结构化属性写在这里）；`profile` 仅允许 `motivation`、`summary`、`personaSummary`；`currentState` 为自由键值对，禁止 `__proto__` 等危险键名。
+- **枚举、长度、必填、乐观锁**等约束与服务端一致（如 `aliases` 每项 1..200 字且最多 100 个、`chapter create` 必须带 `volumeId`）。
+- 校验只拦截、不改写：通过校验的原始 `input` 原样传给 CLI。
+
+获取规范时同样能看到合法格式，且在模型获取参数构建格式的第一时间（`tools/list`）就已可见：
+
+- 各写操作工具的 `input` 参数说明直接内嵌该操作的字段格式（如 `scriverse_work` 的 `input` 会列出 `title*（string（自动去首尾空格，至少 1 字，最多 200 字））：作品名；…`，`*` 为必填）。
+- `scriverse_resource` 的工具描述末尾附带全部资源类型的必填字段速查与 character 扩展属性的正确写法。
+- `scriverse_schema` 的返回结果会自动附加目标类型的逐字段格式说明（由上述 schema 生成，与校验永远是同一份事实来源），例如：
+
+```text
+[scriverse-mcp 写入校验] character 字段规范（冗余/未知字段会被拒绝）
+—— create（必填：name）——
+- name（必填，string（自动去首尾空格，至少 1 字，最多 200 字））：人物主名
+- attributes（可选，object（仅允许列出的字段））：结构化属性；仅允许 identity、species、details 三个字段
+    - details（可选，数组（元素：object））：扩展属性列表，如 [{"label":"身高","value":"176cm"}]
+        - label（必填，string（自动去首尾空格，至少 1 字））：属性名，如「身高」
+        - value（必填，string（自动去首尾空格，至少 1 字））：属性值，如「176cm」
+...
+```
+
+约定细节：`resource update` 的版本说明用顶层 `changeNote` 参数（`input` 内不允许 `changeNote`）；`expectedVersionNo` 写在 `input` 内可启用乐观锁（`work update` 的 `changeNote` 与 `expectedVersionNo` 没有对应命令行参数，只能放 `input` 内）。
+
 ## 环境变量
 
 | 变量 | 说明 |

@@ -46,14 +46,18 @@ describe("buildArgs", () => {
   it("work 各动作", () => {
     const work = tool("scriverse_work");
     expect(work.buildArgs({ action: "list" })).toEqual(["work", "list"]);
-    expect(work.buildArgs({ action: "create" })).toEqual(["work", "create", "--input", "-"]);
+    expect(work.buildArgs({ action: "create", input: { title: "新作品" } }))
+      .toEqual(["work", "create", "--input", "-"]);
     expect(work.buildArgs({ action: "get", workId: "work_1" })).toEqual(["work", "get", "work_1"]);
-    expect(work.buildArgs({ action: "update", workId: "work_1" })).toEqual(["work", "update", "work_1", "--input", "-"]);
+    expect(work.buildArgs({ action: "update", workId: "work_1", input: { title: "新作品" } }))
+      .toEqual(["work", "update", "work_1", "--input", "-"]);
     expect(work.buildArgs({ action: "history", workId: "work_1" })).toEqual(["work", "history", "work_1"]);
     expect(work.buildArgs({ action: "restore", workId: "work_1", version: 3, expectedVersionNo: 7 }))
       .toEqual(["work", "restore", "work_1", "--version", "3", "--expected-version", "7"]);
     expect(() => work.buildArgs({ action: "restore", workId: "work_1" })).toThrow(/version/);
     expect(() => work.buildArgs({ action: "get" })).toThrow(/workId/);
+    expect(() => work.buildArgs({ action: "create", input: { title: "x", unknownField: 1 } }))
+      .toThrow(/未知字段 unknownField/);
   });
 
   it("resource 更新携带 change-note", () => {
@@ -61,9 +65,9 @@ describe("buildArgs", () => {
     expect(resource.buildArgs({ type: "character", action: "list", id: "work_1" }))
       .toEqual(["resource", "list", "character", "work_1"]);
     expect(resource.buildArgs({
-      type: "chapter", action: "update", id: "chapter_1", changeNote: "增强开场危机感"
+      type: "chapter", action: "update", id: "chapter_1", changeNote: "增强开场危机感", input: {}
     })).toEqual(["resource", "update", "chapter", "chapter_1", "--input", "-", "--change-note", "增强开场危机感"]);
-    expect(resource.buildArgs({ type: "chapter-outline", action: "create", id: "chapter_1" }))
+    expect(resource.buildArgs({ type: "chapter-outline", action: "create", id: "chapter_1", input: {} }))
       .toEqual(["resource", "create", "chapter-outline", "chapter_1", "--input", "-"]);
   });
 
@@ -87,8 +91,11 @@ describe("buildArgs", () => {
   });
 
   it("chapter 与 annotation 的 id 语义", () => {
-    expect(tool("scriverse_chapter").buildArgs({ action: "batch", id: "work_1", input: {} }))
-      .toEqual(["chapter", "batch", "work_1", "--input", "-"]);
+    expect(tool("scriverse_chapter").buildArgs({
+      action: "batch",
+      id: "work_1",
+      input: { chapters: [{ id: "ch_1", expectedVersionNo: 1 }], action: { type: "delete" } }
+    })).toEqual(["chapter", "batch", "work_1", "--input", "-"]);
     expect(tool("scriverse_annotation").buildArgs({ action: "delete", id: "note_1", expectedVersionNo: 2 }))
       .toEqual(["annotation", "delete", "note_1", "--expected-version", "2"]);
   });
@@ -100,6 +107,25 @@ describe("buildArgs", () => {
     expect(questions.buildArgs({ action: "reject", workId: "work_1", questionId: "q_1" }))
       .toEqual(["ai", "questions", "reject", "work_1", "q_1"]);
     expect(() => questions.buildArgs({ action: "answer", workId: "work_1", questionId: "q_1" })).toThrow(/input/);
+  });
+
+  it("写操作 input 按服务端字段规范校验", () => {
+    const resource = tool("scriverse_resource");
+    expect(() => resource.buildArgs({
+      type: "character", action: "update", id: "char_1",
+      input: { attributes: { height: "176cm" } }
+    })).toThrow(/未知字段 height/);
+    expect(resource.buildArgs({
+      type: "character", action: "update", id: "char_1",
+      input: { attributes: { details: [{ label: "身高", value: "176cm" }] } }
+    })).toEqual(["resource", "update", "character", "char_1", "--input", "-"]);
+    expect(() => tool("scriverse_writing").buildArgs({
+      action: "goal", workId: "work_1",
+      input: { dailyGoal: 1, targetTotal: 1, deadline: "明年" }
+    })).toThrow(/YYYY-MM-DD/);
+    expect(() => tool("scriverse_resource").buildArgs({
+      type: "review", action: "create", id: "work_1", input: {}
+    })).toThrow(/不支持的资源类型/);
   });
 });
 
