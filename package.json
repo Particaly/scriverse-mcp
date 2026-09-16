@@ -1,0 +1,34 @@
+{
+  "name": "scriverse-mcp",
+  "version": "0.1.0",
+  "description": "Model Context Protocol stdio server that wraps the Scriverse CLI to control a deployed Scriverse service",
+  "license": "AGPL-3.0-only",
+  "author": "musnows",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "scriverse-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist/**/*"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.18.0",
+    "@musnows/scriverse": "^1.0.10",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
+  }
+}
